@@ -36,13 +36,22 @@ type index_info struct {
 }
 
 type MST struct {
-	root *node
-	db   *leveldb.DB
+	root     *node
+	rootHash [32]byte
+	db       *leveldb.DB
 }
 
 func new() *MST {
 	mst := &MST{root: &node{isLeaf: true, isExtend: false}}
 	return mst
+}
+
+func (t *MST) putDb(db *leveldb.DB) {
+	t.db = db
+}
+
+func (t *MST) putRootHash() {
+	t.rootHash = t.root.hash
 }
 
 func (t *MST) root_insert(in index_info) {
@@ -55,7 +64,7 @@ func (t *MST) root_insert(in index_info) {
 			if strings.Compare(in.key[0], root1.child[r].key[0]) == 0 {
 				root1.isLeaf = false
 				flag = false
-				root1.child[r].insert(in)
+				root1.child[r].insert(in, t.db)
 				break
 			}
 		}
@@ -68,12 +77,12 @@ func (t *MST) root_insert(in index_info) {
 				root1.isExtend = false
 			}
 			j := len(root1.child)
-			root1.child[j-1].updateHash()
+			root1.child[j-1].updateHash(t.db)
 		}
 	}
 }
 
-func (node1 *node) insert(in index_info) {
+func (node1 *node) insert(in index_info, db *leveldb.DB) {
 	ln := len(node1.key)
 	li := len(in.key)
 	flag := true
@@ -83,17 +92,17 @@ func (node1 *node) insert(in index_info) {
 				if k == ln-1 {
 					if node1.isLeaf || node1.isExtend {
 						node1.value = append(node1.value, in.pos)
-						node1.updateHash()
+						node1.updateHash(db)
 					} else {
 						node1.isExtend = true
 						node1.value = append(node1.value, in.pos)
-						node1.updateHash()
+						node1.updateHash(db)
 					}
 				} else {
 					continue
 				}
 			} else {
-				node1.split(in, k, ln, li)
+				node1.split(in, k, ln, li, db)
 				break
 			}
 		}
@@ -103,13 +112,13 @@ func (node1 *node) insert(in index_info) {
 				if strings.Compare(in.key[0], node1.child[r].key[0]) == 0 {
 					node1.isLeaf = false
 					flag = false
-					node1.child[r].insert(in)
+					node1.child[r].insert(in, db)
 					break
 				}
 			}
 			if flag {
 				node1.child = append(node1.child, &node{parent: node1, key: in.key[ln:li:li], value: []uint{in.pos}, isLeaf: true, isExtend: false})
-				node1.child[len(node1.child)-1].updateHash()
+				node1.child[len(node1.child)-1].updateHash(db)
 			}
 			return
 		}
@@ -120,12 +129,12 @@ func (node1 *node) insert(in index_info) {
 						node1.isExtend = true
 						node1.isLeaf = false
 						node1.child = append(node1.child, &node{parent: node1, isLeaf: true, key: in.key[k+1 : li : li], value: []uint{in.pos}})
-						node1.child[len(node1.child)-1].updateHash()
+						node1.child[len(node1.child)-1].updateHash(db)
 					} else {
 						for r := 0; r < len(node1.child); r++ {
 							if strings.Compare(in.key[ln], node1.child[r].key[0]) == 0 {
 								node1.child[r].isExtend = false
-								node1.child[r].insert(index_info{key: in.key[ln:li:li], pos: in.pos})
+								node1.child[r].insert(index_info{key: in.key[ln:li:li], pos: in.pos}, db)
 								flag = false
 								break
 							}
@@ -133,14 +142,14 @@ func (node1 *node) insert(in index_info) {
 						if flag {
 							node1.isExtend = false
 							node1.child = append(node1.child, &node{parent: node1, key: in.key[ln:li:li], value: []uint{in.pos}, isLeaf: true, isExtend: false})
-							node1.child[len(node1.child)-1].updateHash()
+							node1.child[len(node1.child)-1].updateHash(db)
 						}
 					}
 				} else {
 					continue
 				}
 			} else {
-				node1.split(in, k, ln, li)
+				node1.split(in, k, ln, li, db)
 				break
 			}
 		}
@@ -157,46 +166,47 @@ func (node1 *node) insert(in index_info) {
 					node1.key = node1.key[0:li:li]
 					node1.child = nil
 					node1.child = append(node1.child, &node2)
-					node1.child[len(node1.child)-1].updateHash()
+					node1.child[len(node1.child)-1].updateHash(db)
 				}
 			} else {
-				node1.split(in, k, ln, li)
+				node1.split(in, k, ln, li, db)
 				break
 			}
 		}
 	}
 }
 
-func (node1 *node) split(in index_info, k int, ln int, li int) {
+func (node1 *node) split(in index_info, k int, ln int, li int, db *leveldb.DB) {
 	node1.child = append(node1.child, &node{parent: node1, isLeaf: true, key: node1.key[k:ln:ln], value: node1.value})
-	node1.child[len(node1.child)-1].updateHash()
+	node1.child[len(node1.child)-1].updateHash(db)
 	node1.child = append(node1.child, &node{parent: node1, isLeaf: true, key: in.key[k:li:li], value: []uint{in.pos}})
-	node1.child[len(node1.child)-1].updateHash()
+	node1.child[len(node1.child)-1].updateHash(db)
 	node1.isLeaf = false
 	node1.key = node1.key[0:k:ln]
 	node1.value = nil
 }
 
-func (node1 *node) updateHash() {
+func (node1 *node) updateHash(db *leveldb.DB) {
 	if len(node1.child) > 0 {
 		node1.childHash = nil
 		for k := range node1.child {
-			node1.childHash =  append(node1.childHash, node1.child[k].hash)
+			node1.childHash = append(node1.childHash, node1.child[k].hash)
 		}
 	}
 	nodekv1 := nodekv{node1.childHash, node1.key, node1.value, node1.hash, node1.isLeaf, node1.isExtend}
-	//fmt.Println(nodekv1)
 	var data []byte
+	var hash []byte
 	if nodekv1.IsLeaf {
 		data, _ = rlp.EncodeToBytes(nodekv1)
-		//fmt.Println("data:", data)
 		nodekv1.Hash = sha256.Sum256(data)
-		//fmt.Println("hash:", nodekv1.Hash)
 		node1.hash = nodekv1.Hash
+		data, _ = rlp.EncodeToBytes(nodekv1)
+		hash = nodekv1.Hash[:]
+		db.Put(hash, data, nil)
 		if node1.parent == nil {
 			return
 		} else {
-			node1.parent.updateHash()
+			node1.parent.updateHash(db)
 		}
 	} else if nodekv1.IsExtend {
 		data, _ = rlp.EncodeToBytes(nodekv1)
@@ -207,10 +217,13 @@ func (node1 *node) updateHash() {
 		}
 		nodekv1.Hash = sha256.Sum256(data)
 		node1.hash = nodekv1.Hash
+		data, _ = rlp.EncodeToBytes(nodekv1)
+		hash = nodekv1.Hash[:]
+		db.Put(hash, data, nil)
 		if node1.parent == nil {
 			return
 		} else {
-			node1.parent.updateHash()
+			node1.parent.updateHash(db)
 		}
 	} else {
 		for i := range nodekv1.ChildHash {
@@ -220,10 +233,13 @@ func (node1 *node) updateHash() {
 		}
 		nodekv1.Hash = sha256.Sum256(data)
 		node1.hash = nodekv1.Hash
+		data, _ = rlp.EncodeToBytes(nodekv1)
+		hash = nodekv1.Hash[:]
+		db.Put(hash, data, nil)
 		if node1.parent == nil {
 			return
 		} else {
-			node1.parent.updateHash()
+			node1.parent.updateHash(db)
 		}
 	}
 }
@@ -299,7 +315,26 @@ func (t *MST) search(keys []string) []uint {
 	return nil
 }
 
-//func (node1 *node) reNewNode() {
-//	for i := 0;i < node.
-//
-//}
+func (node1 *node) reNewNode(db *leveldb.DB) {
+	nodekv1 := nodekv{}
+	data1, _ := db.Get(node1.hash[:], nil)
+	err := rlp.DecodeBytes(data1, &nodekv1)
+	if err != nil {
+		fmt.Println(err)
+	}
+	node1.childHash = nodekv1.ChildHash
+	node1.key = nodekv1.Key
+	node1.value = nodekv1.Value
+	node1.isLeaf = nodekv1.IsLeaf
+	node1.isExtend = nodekv1.IsExtend
+	for i := range node1.childHash {
+		node1.child = append(node1.child, &node{parent:node1,hash:node1.childHash[i]})
+		node1.child[i].reNewNode(db)
+	}
+}
+
+func (t *MST) reNewMst() {
+	rootNode := node{}
+	rootNode.hash = t.rootHash
+	rootNode.reNewNode(t.db)
+}
