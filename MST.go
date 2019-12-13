@@ -56,8 +56,9 @@ func (t *MST) putRootHash() {
 
 func (t *MST) root_insert(in index_info) {
 	li := len(in.key)
-	for i := 0; i < len(in.key); i++ {
-		in.key = in.key[i:li:li]
+	keys := in.key
+	for i := 0; i < li; i++ {
+		in.key = keys[i:li:li]
 		root1 := t.root
 		flag := true
 		for r := 0; r < len(root1.child); r++ {
@@ -177,13 +178,15 @@ func (node1 *node) insert(in index_info, db *leveldb.DB) {
 }
 
 func (node1 *node) split(in index_info, k int, ln int, li int, db *leveldb.DB) {
+	keys := node1.key
 	node1.child = append(node1.child, &node{parent: node1, isLeaf: true, key: node1.key[k:ln:ln], value: node1.value})
 	node1.child[len(node1.child)-1].updateHash(db)
 	node1.child = append(node1.child, &node{parent: node1, isLeaf: true, key: in.key[k:li:li], value: []uint{in.pos}})
 	node1.child[len(node1.child)-1].updateHash(db)
 	node1.isLeaf = false
-	node1.key = node1.key[0:k:ln]
+	node1.key = keys[0:k:ln]
 	node1.value = nil
+	node1.updateHash(db)
 }
 
 func (node1 *node) updateHash(db *leveldb.DB) {
@@ -208,24 +211,8 @@ func (node1 *node) updateHash(db *leveldb.DB) {
 		} else {
 			node1.parent.updateHash(db)
 		}
-	} else if nodekv1.IsExtend {
-		data, _ = rlp.EncodeToBytes(nodekv1)
-		for i := range nodekv1.ChildHash {
-			for j := range nodekv1.ChildHash[i] {
-				data = append(data, nodekv1.ChildHash[i][j])
-			}
-		}
-		nodekv1.Hash = sha256.Sum256(data)
-		node1.hash = nodekv1.Hash
-		data, _ = rlp.EncodeToBytes(nodekv1)
-		hash = nodekv1.Hash[:]
-		db.Put(hash, data, nil)
-		if node1.parent == nil {
-			return
-		} else {
-			node1.parent.updateHash(db)
-		}
 	} else {
+		data, _ = rlp.EncodeToBytes(nodekv1)
 		for i := range nodekv1.ChildHash {
 			for j := range nodekv1.ChildHash[i] {
 				data = append(data, nodekv1.ChildHash[i][j])
@@ -327,6 +314,9 @@ func (node1 *node) reNewNode(db *leveldb.DB) {
 	node1.value = nodekv1.Value
 	node1.isLeaf = nodekv1.IsLeaf
 	node1.isExtend = nodekv1.IsExtend
+	if len(node1.childHash) == 0 {
+		return
+	}
 	for i := range node1.childHash {
 		node1.child = append(node1.child, &node{parent:node1,hash:node1.childHash[i]})
 		node1.child[i].reNewNode(db)
@@ -336,5 +326,6 @@ func (node1 *node) reNewNode(db *leveldb.DB) {
 func (t *MST) reNewMst() {
 	rootNode := node{}
 	rootNode.hash = t.rootHash
+	t.root = &rootNode
 	rootNode.reNewNode(t.db)
 }
